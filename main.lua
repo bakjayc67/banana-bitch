@@ -46,9 +46,35 @@ local Humanoid = Character:WaitForChild("Humanoid")
 -- Global state
 getgenv().BFHub = getgenv().BFHub or {}
 local Hub = getgenv().BFHub
-Hub.Flags = Hub.Flags or {}
-Hub.Connections = Hub.Connections or {}
-Hub.Running = Hub.Running or {}
+-- kill previous execute so old Heartbeat/flag loops die
+Hub.Generation = (tonumber(Hub.Generation) or 0) + 1
+local SCRIPT_GEN = Hub.Generation
+pcall(function()
+    if Hub.Window and Hub.Window.Destroy then Hub.Window:Destroy() end
+end)
+if Hub.Connections then
+    for _, c in pairs(Hub.Connections) do
+        pcall(function() c:Disconnect() end)
+    end
+end
+Hub.Connections = {}
+Hub.Running = {}
+-- NEVER inherit farm/combat flags from last execute
+Hub.Flags = {}
+pcall(function()
+    local char = game.Players.LocalPlayer.Character
+    local hrp = char and char:FindFirstChild("HumanoidRootPart")
+    if hrp then
+        hrp.Anchored = false
+        local bv = hrp:FindFirstChild("BodyVelocity1")
+        if bv then bv:Destroy() end
+    end
+    local hum = char and char:FindFirstChild("Humanoid")
+    if hum then
+        hum.Sit = false
+        hum.PlatformStand = false
+    end
+end)
 
 local function SetFlag(name, value)
     Hub.Flags[name] = value
@@ -65,6 +91,54 @@ end
 
 local function GetFlag(name)
     return Hub.Flags[name]
+end
+
+local function FlagOn(name)
+    return Hub.Flags[name] == true
+end
+
+-- quest table lives at top so UI callbacks never index nil
+CurrentQuest = CurrentQuest or {
+    Mon = nil, NameMon = nil, NameQuest = nil,
+    LevelQuest = 1, CFrameQuest = nil, CFrameMon = nil,
+}
+
+local function IsFarming()
+    return FlagOn("AutoFarmLevel") or FlagOn("AutoFarmNearest")
+end
+
+local function StopFarmPhysics()
+    pcall(function()
+        StartMagnet = false
+        PosMon = nil
+        if ActiveTween then
+            ActiveTween:Cancel()
+            ActiveTween = nil
+        end
+        local char = LocalPlayer.Character
+        local hrp = char and char:FindFirstChild("HumanoidRootPart")
+        local hum = char and char:FindFirstChild("Humanoid")
+        if hrp then
+            hrp.Anchored = false
+            local bv = hrp:FindFirstChild("BodyVelocity1")
+            if bv then bv:Destroy() end
+        end
+        if hum then
+            hum.Sit = false
+            hum.PlatformStand = false
+            pcall(function() hum:ChangeState(Enum.HumanoidStateType.GettingUp) end)
+        end
+        if char then
+            for _, part in ipairs(char:GetDescendants()) do
+                if part:IsA("BasePart") and part.Name ~= "HumanoidRootPart" then
+                    -- restore collide on limbs only; HRP stays collide for standing
+                    if part.Name == "Head" or part.Name:find("Arm") or part.Name:find("Leg") or part.Name:find("Torso") or part.Name:find("Hand") or part.Name:find("Foot") then
+                        part.CanCollide = false -- roblox default for those
+                    end
+                end
+            end
+        end
+    end)
 end
 
 local function Connect(name, signal, callback)
@@ -262,6 +336,7 @@ end)
 
 task.spawn(function()
     while task.wait(0.6) do
+        if Hub.Generation ~= SCRIPT_GEN then return end
         pcall(function()
             if not HumanoidRootPart then return end
             local y = HumanoidRootPart.Position.Y
@@ -302,21 +377,21 @@ end
 
 task.spawn(function()
     while true do
-        task.wait(GetFlag("FastFarm") and 0.08 or 0.12)
+        if Hub.Generation ~= SCRIPT_GEN then return end
+        task.wait(0.12)
         pcall(function()
             if not Character or not HumanoidRootPart or not Humanoid then return end
-            if AnyFarmActive() then
-                -- anti sit
+            -- ONLY lock in air when a farm is ON and we are actually stacked on a mob
+            local farming = IsFarming() and StartMagnet and PosMon
+            if farming then
                 if Humanoid.Sit then Humanoid.Sit = false end
-                -- body velocity lock
                 if not HumanoidRootPart:FindFirstChild("BodyVelocity1") then
                     local bv = Instance.new("BodyVelocity")
                     bv.Name = "BodyVelocity1"
-                    bv.MaxForce = Vector3.new(10000, 10000, 10000)
+                    bv.MaxForce = Vector3.new(40000, 40000, 40000)
                     bv.Velocity = Vector3.new(0, 0, 0)
                     bv.Parent = HumanoidRootPart
                 end
-                -- noclip parts
                 for _, part in ipairs(Character:GetDescendants()) do
                     if part:IsA("BasePart") then
                         part.CanCollide = false
@@ -325,6 +400,7 @@ task.spawn(function()
             else
                 local bv = HumanoidRootPart:FindFirstChild("BodyVelocity1")
                 if bv then bv:Destroy() end
+                if Humanoid.PlatformStand then Humanoid.PlatformStand = false end
             end
         end)
     end
@@ -400,7 +476,13 @@ local function DummyControl()
 end
 local function DummyTab()
     local t = {}
-    function t:AddToggle(idx, cfg) return DummyControl() end
+    function t:AddToggle(idx, cfg)
+        cfg = cfg or {}
+        if type(cfg.Callback) == "function" then
+            pcall(cfg.Callback, cfg.Default == true)
+        end
+        return DummyControl()
+    end
     function t:AddButton(idx, cfg) return DummyControl() end
     function t:AddDropdown(idx, cfg) return DummyControl() end
     function t:AddSlider(idx, cfg) return DummyControl() end
@@ -418,6 +500,13 @@ local function DummyWindow()
 end
 
 Fluent = LoadFluentLib()
+pcall(function()
+    if Fluent and type(Fluent.Options) == "table" then
+        for k in pairs(Fluent.Options) do
+            Fluent.Options[k] = nil
+        end
+    end
+end)
 if not Fluent then
     warn("[BFHub] Fluent load failed — dummy UI, farm still runs")
     Fluent = {
@@ -467,6 +556,7 @@ do
     end)
     if ok and win then
         Window = win
+        Hub.Window = win
         print("[BFHub] Fluent window ok")
     else
         warn("[BFHub] CreateWindow failed:", win)
@@ -506,6 +596,24 @@ local Tabs = {
     Misc = AddTabSafe("Misc", "settings"),
 }
 
+do
+    local function wrapTab(tab)
+        if type(tab) ~= "table" then return end
+        for _, method in ipairs({"AddToggle", "AddButton", "AddSlider", "AddDropdown", "AddParagraph", "AddSection", "AddInput"}) do
+            local raw = tab[method]
+            if type(raw) == "function" then
+                tab[method] = function(self, a, b, c)
+                    local ok, res = pcall(raw, self, a, b, c)
+                    if ok then return res end
+                    warn("[BFHub] UI", method, tostring(a), res)
+                    return DummyControl()
+                end
+            end
+        end
+    end
+    for _, tab in pairs(Tabs) do wrapTab(tab) end
+end
+
 -- always-on mini bar so farm can be toggled even if Fluent is invisible
 pcall(function()
     local pg = LocalPlayer:WaitForChild("PlayerGui")
@@ -540,12 +648,15 @@ pcall(function()
         b.MouseButton1Click:Connect(function()
             local v = not GetFlag(flag)
             SetFlag(flag, v)
-            if flag == "AutoFarmLevel" and v then
-                SetFlag("AutoBuso", true)
-                SetFlag("AttackNoCD", true)
-                SetFlag("BringEnemy", true)
-                pcall(EnsureBuso)
-                pcall(EquipMelee)
+            if flag == "AutoFarmLevel" then
+                if v then
+                    SetFlag("AutoBuso", true)
+                    SetFlag("BringEnemy", true)
+                    pcall(EnsureBuso)
+                    pcall(EquipMelee)
+                else
+                    pcall(StopFarmPhysics)
+                end
             end
             b.BackgroundColor3 = v and Color3.fromRGB(40, 140, 70) or Color3.fromRGB(40, 40, 48)
             pcall(function()
@@ -675,13 +786,15 @@ Tabs.Farm:AddToggle("AutoFarmLevel", {
     Title = "Auto Farm Level (Quest + Bring)",
     Default = false,
     Callback = function(v)
-        SetFlag("AutoFarmLevel", v)
+        SetFlag("AutoFarmLevel", v == true)
         if v then
             SetFlag("AutoBuso", true)
+            SetFlag("BringEnemy", true)
             pcall(EnsureBuso)
             pcall(EquipMelee)
-            Notify("Farm", "Quest farm ON — melee + Buso (SpawnFlagLoop)")
+            Notify("Farm", "Quest farm ON — melee + Buso")
         else
+            pcall(StopFarmPhysics)
             Notify("Farm", "Quest farm OFF")
         end
     end
@@ -768,12 +881,12 @@ Tabs.Farm:AddToggle("AutoFarmRaid", {
 
 Tabs.Farm:AddToggle("SkillSpam", {
     Title = "Skill Spam (Z/X/C/V)",
-    Default = true,
+    Default = false,
     Callback = function(v) SetFlag("SkillSpam", v) end
 })
 Tabs.Farm:AddToggle("FastFarm", {
     Title = "Fast Farm (speed boost)",
-    Default = true,
+    Default = false,
     Callback = function(v) SetFlag("FastFarm", v) end
 })
 Tabs.Farm:AddToggle("BypassTP", {
@@ -799,7 +912,7 @@ Tabs.Farm:AddSlider("DistanceAutoFarm", {
 })
 Tabs.Farm:AddToggle("BringEnemy", {
     Title = "Bring Enemy",
-    Default = true,
+    Default = false,
     Callback = function(v) SetFlag("BringEnemy", v) end
 })
 
@@ -1079,11 +1192,12 @@ Tabs.Quests:AddToggle("AutoAcceptQuest", {
             task.spawn(function()
                 while GetFlag("AutoAcceptQuest") do
                     CheckQuest()
-                    if CurrentQuest.NameQuest and not HasActiveQuest() then
-                        if CurrentQuest.CFrameQuest then
-                            TweenTo(CurrentQuest.CFrameQuest, 350)
+                    local cq = CurrentQuest
+                    if cq and cq.NameQuest and not HasActiveQuest() then
+                        if cq.CFrameQuest then
+                            TweenTo(cq.CFrameQuest, 350)
                         end
-                        StartQuestRemote(CurrentQuest.NameQuest, CurrentQuest.LevelQuest)
+                        StartQuestRemote(cq.NameQuest, cq.LevelQuest)
                     end
                     task.wait(1.2)
                 end
@@ -1339,7 +1453,7 @@ Tabs.Fruits:AddToggle("AutoStoreFruit", {
 })
 Tabs.Fruits:AddToggle("FruitNotifier", {
     Title = "Fruit Spawn Notifier",
-    Default = true,
+    Default = false,
     Callback = function(v) SetFlag("FruitNotifier", v) end
 })
 
@@ -1479,7 +1593,7 @@ Tabs.Swords:AddToggle("AutoMelee", {
 -------------------------------------------------
 Tabs.Race:AddToggle("AutoBuso", {
     Title = "Auto Turn on Buso",
-    Default = true,
+    Default = false,
     Callback = function(v)
         SetFlag("AutoBuso", v)
         if v then
@@ -1995,7 +2109,7 @@ Tabs.Combat:AddToggle("AutoAimbot", {
 
 Tabs.Combat:AddToggle("AttackNoCD", {
     Title = "Attack No CoolDown",
-    Default = true,
+    Default = false,
     Callback = function(v) SetFlag("AttackNoCD", v) end
 })
 
@@ -2557,6 +2671,10 @@ function EquipMelee()
     if GetFlag("AutoMasteryFruit") or GetFlag("AutoMasteryGun") or GetFlag("AutoMasterySword") then
         return false
     end
+    -- drop fruit/sword from hand so melee can equip
+    if eq then
+        pcall(function() Humanoid:UnequipTools() end)
+    end
     local pack = LocalPlayer:FindFirstChild("Backpack")
     if not pack then return false end
     for _, t in ipairs(pack:GetChildren()) do
@@ -2617,7 +2735,7 @@ World3 = (game.PlaceId == 7449423635)
 Name, QuestName, LevelQuest, NameMon = nil, nil, 1, nil
 CFrameMon, VectorMon, CFrameQuest, VectorQuest, LevelFarm = nil, nil, nil, nil, nil
 
-local CurrentQuest = {
+CurrentQuest = CurrentQuest or {
     Mon = nil,
     NameMon = nil,
     NameQuest = nil,
@@ -3707,7 +3825,7 @@ function GetCurrentBlade()
     return ok and blade or nil
 end
 
-local function CollectHitParts(range)
+local function CollectHitParts(range, nameFilter)
     local parts = {}
     local enemies = workspace:FindFirstChild("Enemies")
     if not enemies or not Character or not HumanoidRootPart then return parts end
@@ -3715,14 +3833,34 @@ local function CollectHitParts(range)
     local r2 = (range or FA_RANGE) * (range or FA_RANGE)
     for _, v in ipairs(enemies:GetChildren()) do
         if v ~= Character then
-            local hrp = v:FindFirstChild("HumanoidRootPart")
-            local hum = v:FindFirstChild("Humanoid")
-            if hrp and hum and hum.Health > 0 then
-                local d = (hrp.Position - origin)
-                if d.X * d.X + d.Y * d.Y + d.Z * d.Z <= r2 then
-                    for _, part in ipairs(v:GetChildren()) do
-                        if part:IsA("BasePart") then
-                            parts[#parts + 1] = { v, part }
+            if nameFilter and nameFilter ~= "" then
+                local n = v.Name
+                if n ~= nameFilter and n ~= Name and not n:find(nameFilter, 1, true) then
+                    -- skip non-quest mobs while farming
+                else
+                    local hrp = v:FindFirstChild("HumanoidRootPart")
+                    local hum = v:FindFirstChild("Humanoid")
+                    if hrp and hum and hum.Health > 0 then
+                        local d = (hrp.Position - origin)
+                        if d.X * d.X + d.Y * d.Y + d.Z * d.Z <= r2 then
+                            for _, part in ipairs(v:GetChildren()) do
+                                if part:IsA("BasePart") then
+                                    parts[#parts + 1] = { v, part }
+                                end
+                            end
+                        end
+                    end
+                end
+            else
+                local hrp = v:FindFirstChild("HumanoidRootPart")
+                local hum = v:FindFirstChild("Humanoid")
+                if hrp and hum and hum.Health > 0 then
+                    local d = (hrp.Position - origin)
+                    if d.X * d.X + d.Y * d.Y + d.Z * d.Z <= r2 then
+                        for _, part in ipairs(v:GetChildren()) do
+                            if part:IsA("BasePart") then
+                                parts[#parts + 1] = { v, part }
+                            end
                         end
                     end
                 end
@@ -3901,8 +4039,12 @@ pcall(function()
 end)
 
 function FastAttack()
+    if Hub.Generation ~= SCRIPT_GEN then return end
+    if not (FlagOn("AttackNoCD") or IsFarming() or FlagOn("AutoFarmNearest") or FlagOn("MobAura")) then
+        return
+    end
     if not Character or not HumanoidRootPart then return end
-    if AnyQuestFarmOn and AnyQuestFarmOn() then
+    if IsFarming() then
         pcall(EnsureBuso)
         pcall(EquipMelee)
     end
@@ -3941,7 +4083,9 @@ function FastAttack()
         -- still allow if equipped combat tool
     end
 
-    local parts = CollectHitParts(FA_RANGE)
+    local filter = nil
+    if IsFarming() and NameMon then filter = NameMon end
+    local parts = CollectHitParts(FA_RANGE, filter)
     if #parts == 0 then
         ZeroCooldown()
         return
@@ -3951,10 +4095,10 @@ function FastAttack()
     ZeroCooldown()
     FireRegisterAttack(0)
     FireRegisterHit(head, parts)
+    if FlagOn("FastFarm") or FlagOn("DoubleAttack") then
+        FireRegisterHit(head, parts)
+    end
     FireXorHit(head, parts)
-    -- density: extra hits, no wait
-    FireRegisterHit(head, parts)
-    FireRegisterHit(head, parts)
     LegacyValidatorHit(parts)
 end
 
@@ -3989,15 +4133,14 @@ local function AttackTarget(mob)
     end)
 end
 
--- Heartbeat no-CD when flag on (faster than SpawnFlagLoop)
+-- Heartbeat no-CD ONLY when Attack No CoolDown is toggled on
 task.spawn(function()
     local rs = game:GetService("RunService")
     rs.Heartbeat:Connect(function()
-        if not GetFlag("AttackNoCD") and not GetFlag("AutoFarmLevel") and not GetFlag("AutoFarmNearest") then
-            return
-        end
+        if Hub.Generation ~= SCRIPT_GEN then return end
+        if not FlagOn("AttackNoCD") then return end
         local now = os.clock()
-        if now - FA_LAST < 0.012 then return end
+        if now - FA_LAST < 0.05 then return end
         FA_LAST = now
         pcall(FastAttack)
     end)
@@ -4005,7 +4148,8 @@ end)
 
 -- Skill spam (Z/X/C/V) while farming for faster clear
 function SpamSkills()
-    if not (GetFlag("SkillSpam") or GetFlag("FastFarm")) then return end
+    if not FlagOn("SkillSpam") then return end
+    if not (IsFarming() or FlagOn("AutoMasteryFruit") or FlagOn("AutoMasteryGun") or FlagOn("AutoMasterySword")) then return end
     pcall(function()
         local vim = game:GetService("VirtualInputManager")
         for _, key in ipairs({"Z", "X", "C", "V"}) do
@@ -4069,6 +4213,10 @@ local function DoQuestFarmStep()
     if not HumanoidRootPart then return end
     CheckQuest()
     if not QuestName or not CFrameQuest then
+        if not _G._BFHubNoQuestWarn then
+            _G._BFHubNoQuestWarn = true
+            warn("[BFHub] CheckQuest empty — no quest for this level/sea")
+        end
         return
     end
     -- always melee + buso while quest farming (ignore fruit/sword in hand)
@@ -5643,14 +5791,14 @@ end
 -- Sync default flags (Fluent Default=true may not fire Callback)
 local function SyncDefaultFlags()
     local defaults = {
-        FastFarm = true,
-        SkillSpam = true,
-        BringEnemy = true,
-        AttackNoCD = true,
-        DoubleAttack = true,
-        AutoBuso = true,
+        FastFarm = false,
+        SkillSpam = false,
+        BringEnemy = false,
+        AttackNoCD = false,
+        DoubleAttack = false,
+        AutoBuso = false,
         TweenSpeed = 350,
-        DistanceAutoFarm = 8,
+        DistanceAutoFarm = 15,
         MobAuraDistance = 1000,
         MasteryLock = 600,
     }
@@ -5659,7 +5807,7 @@ local function SyncDefaultFlags()
             Hub.Flags[k] = v
         end
     end
-    -- pull from Fluent.Options if present
+    -- pull from Fluent.Options if present (UI is source of truth)
     pcall(function()
         if Fluent and Fluent.Options then
             for name, opt in pairs(Fluent.Options) do
@@ -5673,10 +5821,6 @@ local function SyncDefaultFlags()
     end)
 end
 SyncDefaultFlags()
-task.spawn(function()
-    task.wait(1)
-    SyncDefaultFlags()
-end)
 
 -- generic loop spawner
 
@@ -5684,27 +5828,33 @@ local function SpawnFlagLoop(flagName, fn, interval)
     interval = interval or 0.2
     task.spawn(function()
         while true do
-            -- sync this flag from Fluent UI if present (fixes Default/callback miss)
+            if Hub.Generation ~= SCRIPT_GEN then return end
+            -- sync this flag from Fluent UI if present
             pcall(function()
                 if Fluent and Fluent.Options and Fluent.Options[flagName] then
                     local opt = Fluent.Options[flagName]
                     if opt.Value ~= nil then
-                        Hub.Flags[flagName] = opt.Value
+                        Hub.Flags[flagName] = opt.Value == true or opt.Value
                     end
                 end
             end)
-            if GetFlag(flagName) then
-                local ok, err = pcall(fn)
-                if not ok then
-                    warn("[BFHub] loop", flagName, err)
+            if FlagOn(flagName) or (Hub.Flags[flagName] and Hub.Flags[flagName] ~= false) then
+                -- numeric flags (sliders) should not run as loops
+                if type(Hub.Flags[flagName]) == "number" then
+                    task.wait(1)
+                else
+                    local ok, err = pcall(fn)
+                    if not ok then
+                        warn("[BFHub] loop", flagName, err)
+                    end
+                    local waitTime = interval
+                    if FlagOn("FastFarm") then
+                        waitTime = math.max(0.05, interval * 0.7)
+                    end
+                    task.wait(waitTime)
                 end
-                local waitTime = interval
-                if GetFlag("FastFarm") then
-                    waitTime = math.max(0.04, interval * 0.6)
-                end
-                task.wait(waitTime)
             else
-                task.wait(0.35)
+                task.wait(0.4)
             end
         end
     end)
@@ -5834,7 +5984,7 @@ SpawnFlagLoop("AutoFishing", function() RunFishing() end, 1.2)
 -- Fast attack continuous when flag
 SpawnFlagLoop("AttackNoCD", function()
     FastAttack()
-end, 0.01)
+end, 0.08)
 
 -- Mob aura from reference concept
 SpawnFlagLoop("MobAura", function()
@@ -5891,9 +6041,9 @@ SpawnFlagLoop("AutoRaceV3", function() RunRaceV3() end, 2)
 SpawnFlagLoop("AutoRaceV4", function() RunRaceV4() end, 3)
 
 SpawnFlagLoop("AutoNextIsland", function()
-    -- sequential island hop best-effort by level bands handled in CheckQuest farm
     CheckQuest()
-    if CurrentQuest.CFrameMon then TweenTo(CurrentQuest.CFrameMon, 350) end
+    local cq = CurrentQuest
+    if cq and cq.CFrameMon then TweenTo(cq.CFrameMon, 350) end
 end, 5)
 
 SpawnFlagLoop("AutoCraftVolcanic", function()
@@ -6088,12 +6238,13 @@ end, 2)
 task.spawn(function()
     local acc = 0
     while true do
+        if Hub.Generation ~= SCRIPT_GEN then return end
         local dt = RunService.Heartbeat:Wait()
-        if not (GetFlag("AutoFarmLevel") or GetFlag("BringEnemy")) then
+        if not (IsFarming() and FlagOn("BringEnemy") and StartMagnet and PosMon) then
             task.wait(0.4)
         else
             acc = acc + dt
-            if acc >= 0.06 then
+            if acc >= 0.08 then
                 acc = 0
                 pcall(function()
                     if not (StartMagnet and PosMon and HumanoidRootPart) then return end
@@ -6101,6 +6252,7 @@ task.spawn(function()
                     if not enemies then return end
                     local myPos = HumanoidRootPart.Position
                     local targetCF = PosMon
+                    local needle = NameMon or Name
                     local kids = enemies:GetChildren()
                     for i = 1, #kids do
                         local mob = kids[i]
@@ -6108,7 +6260,8 @@ task.spawn(function()
                         local hum = mob:FindFirstChild("Humanoid")
                         if hrp and hum and hum.Health > 0 then
                             local n = mob.Name
-                            if not n:find("Boss") and (hrp.Position - myPos).Magnitude <= 350 then
+                            local same = (not needle) or n == Name or n == NameMon or (NameMon and n:find(NameMon, 1, true))
+                            if same and not n:find("Boss") and (hrp.Position - myPos).Magnitude <= 350 then
                                 hrp.CFrame = targetCF
                                 hrp.CanCollide = false
                                 hrp.Size = Vector3.new(60, 60, 60)
@@ -6128,20 +6281,17 @@ task.spawn(function()
     local acc = 0
     local hb = RunService.Heartbeat
     while true do
+        if Hub.Generation ~= SCRIPT_GEN then return end
         local dt = hb:Wait()
-        local on = GetFlag("AttackNoCD") or GetFlag("AutoFarmLevel")
+        -- AttackNoCD toggle = hit nearby. Auto farm hits inside DoQuestFarmStep only.
+        local on = FlagOn("AttackNoCD")
         if not on then
-            task.wait(0.3)
+            task.wait(0.35)
         else
             acc = acc + dt
-            local need = GetFlag("FastFarm") and 0.04 or 0.06
-            if acc >= need then
+            if acc >= 0.08 then
                 acc = 0
-                pcall(function()
-                    local mob = GetNearestEnemy(55)
-                    if mob then AttackTarget(mob) end
-                    AttackNoCD(1)
-                end)
+                pcall(FastAttack)
             end
         end
     end
@@ -6149,11 +6299,12 @@ end)
 
 task.spawn(function()
     while true do
-        if GetFlag("SkillSpam") or GetFlag("FastFarm") then
+        if Hub.Generation ~= SCRIPT_GEN then return end
+        if FlagOn("SkillSpam") then
             pcall(SpamSkills)
-            task.wait(0.35)
+            task.wait(0.4)
         else
-            task.wait(0.5)
+            task.wait(0.6)
         end
     end
 end)
@@ -6411,22 +6562,24 @@ end, 5)
 
 -- ---- Combat extras ----
 SpawnFlagLoop("BringEnemy", function()
-    if not AnyFarmActive() then return end
-    local mob = GetNearestEnemy(80)
-    if mob and BringEnemy then pcall(BringEnemy, mob) end
-end, 0.2)
+    -- flag only; actual bring happens inside DoQuestFarmStep
+end, 2)
 SpawnFlagLoop("BringMobs", function()
-    local mob = GetNearestEnemy(120)
-    if mob and BringEnemy then pcall(BringEnemy, mob) end
-end, 0.2)
-SpawnFlagLoop("BypassTP", function() end, 5) -- flag only, used by TweenTo
+    if not IsFarming() then return end
+    local mob = GetNearestEnemy(80)
+    if mob and NameMon and mob.Name:find(NameMon, 1, true) and BringEnemy then
+        pcall(BringEnemy, mob)
+    end
+end, 0.25)
+SpawnFlagLoop("BypassTP", function() end, 5)
 SpawnFlagLoop("FastFarm", function() end, 5)
 SpawnFlagLoop("SkillSpam", function()
     if SpamSkills then pcall(SpamSkills) end
-end, 0.4)
+end, 0.45)
 SpawnFlagLoop("DoubleAttack", function()
-    if AttackNoCD then AttackNoCD(1) AttackNoCD(1) end
-end, 0.08)
+    -- only extra hit while quest farming, never free-fire
+    if IsFarming() and FastAttack then pcall(FastAttack) end
+end, 0.12)
 SpawnFlagLoop("AutoAimbot", function()
     local mob = GetNearestEnemy(200)
     if mob and mob:FindFirstChild("HumanoidRootPart") then
@@ -6612,18 +6765,14 @@ print("[BFHub] Full tab-func coverage loaded (Sea1/2/3)")
 
 print("[BFHub] Extra runners loaded")
 
-SetFlag("FastFarm", true)
-SetFlag("SkillSpam", true)
-SetFlag("BringEnemy", true)
-SetFlag("AttackNoCD", true)
-SetFlag("DoubleAttack", true)
-SetFlag("AutoBuso", true)
-SetFlag("TweenSpeed", 350)
-SetFlag("DistanceAutoFarm", 8)
+-- do NOT force farm/combat flags on. UI Default=false is source of truth.
+SetFlag("TweenSpeed", Hub.Flags.TweenSpeed or 350)
+SetFlag("DistanceAutoFarm", Hub.Flags.DistanceAutoFarm or 15)
 
 -- refresh World1/2/3 (sea change / rejoin)
 task.spawn(function()
     while true do
+        if Hub.Generation ~= SCRIPT_GEN then return end
         World1 = (game.PlaceId == 2753915549)
         World2 = (game.PlaceId == 4442272183)
         World3 = (game.PlaceId == 7449423635)
@@ -6674,6 +6823,8 @@ Tabs.Main:AddButton({
         ClearESP()
         if Window then pcall(function() Window:Destroy() end) end
         pcall(function() if Fluent.Destroy then Fluent:Destroy() end end)
+        Hub.Generation = (Hub.Generation or 0) + 1
+        pcall(StopFarmPhysics)
         getgenv().BFHub = nil
     end
 })
@@ -6685,7 +6836,7 @@ pcall(function()
     end
 end)
 pcall(function()
-    Notify("BF Hub 2026", "Deep-fix loaded. Auto Farm = melee+Buso+quest. Attack no-CD ON.", 5)
+    Notify("BF Hub 2026", "Loaded. All farm/combat OFF. Turn on Auto Farm Level.", 5)
 end)
 print("[BFHub] UI elements bound")
 
@@ -6698,7 +6849,7 @@ pcall(function()
         SaveManager:SetFolder("BFFullHub/configs")
         pcall(function() InterfaceManager:BuildInterfaceSection(Tabs.Misc) end)
         pcall(function() SaveManager:BuildConfigSection(Tabs.Misc) end)
-        pcall(function() SaveManager:LoadAutoloadConfig() end)
+        -- do NOT autoload: previous config re-enabled FastFarm/SkillSpam/AttackNoCD
     end
 end)
 
