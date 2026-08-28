@@ -1,5 +1,26 @@
 repeat task.wait() until game:IsLoaded() and game.Players.LocalPlayer
 
+print("[BFHub] boot")
+pcall(function()
+    local g = getgenv and getgenv() or _G
+    if not g.cloneref then g.cloneref = function(o) return o end end
+    if not cloneref then getfenv().cloneref = g.cloneref end
+    if not g.gethui then
+        g.gethui = function()
+            local ok, h = pcall(function() return game:GetService("CoreGui") end)
+            return ok and h or game:GetService("Players").LocalPlayer:WaitForChild("PlayerGui")
+        end
+    end
+    if not g.protectgui then g.protectgui = function() end end
+    if not g.protect_gui then g.protect_gui = g.protectgui end
+    if not g.isfolder then g.isfolder = function() return false end end
+    if not g.makefolder then g.makefolder = function() end end
+    if not g.isfile then g.isfile = function() return false end end
+    if not g.writefile then g.writefile = function() end end
+    if not g.readfile then g.readfile = function() return "" end end
+    if not g.listfiles then g.listfiles = function() return {} end end
+end)
+
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 
@@ -71,12 +92,13 @@ end
 local function CommF(...)
     local comm = GetComm()
     if not comm then return nil end
+    local args = {...}
     local result
     local ok = pcall(function()
         if comm:IsA("RemoteFunction") then
-            result = comm:InvokeServer(...)
+            result = comm:InvokeServer(unpack(args))
         else
-            comm:FireServer(...)
+            comm:FireServer(unpack(args))
         end
     end)
     if not ok then return nil end
@@ -368,76 +390,176 @@ local function LoadFluentLib()
     return nil
 end
 
+local function DummyControl()
+    return {
+        SetValue = function() end,
+        OnChanged = function() end,
+        SetDesc = function() end,
+        Destroy = function() end,
+    }
+end
+local function DummyTab()
+    local t = {}
+    function t:AddToggle(idx, cfg) return DummyControl() end
+    function t:AddButton(idx, cfg) return DummyControl() end
+    function t:AddDropdown(idx, cfg) return DummyControl() end
+    function t:AddSlider(idx, cfg) return DummyControl() end
+    function t:AddParagraph(cfg) return DummyControl() end
+    function t:AddSection(title) return DummyControl() end
+    function t:AddInput(idx, cfg) return DummyControl() end
+    return t
+end
+local function DummyWindow()
+    local w = {}
+    function w:AddTab() return DummyTab() end
+    function w:SelectTab() end
+    function w:Destroy() end
+    return w
+end
+
 Fluent = LoadFluentLib()
 if not Fluent then
-    warn("[BFHub] Fluent load failed — limited UI")
+    warn("[BFHub] Fluent load failed — dummy UI, farm still runs")
     Fluent = {
-        CreateWindow = function()
-            return {
-                AddTab = function()
-                    return {
-                        AddToggle = function() return {} end,
-                        AddButton = function() return {} end,
-                        AddDropdown = function() return {} end,
-                        AddSlider = function() return {} end,
-                        AddParagraph = function() return { SetDesc = function() end } end,
-                        AddSection = function() return {} end,
-                        AddInput = function() return {} end,
-                    }
-                end,
-                SelectTab = function() end,
-            }
-        end,
-        Notify = function(opts)
+        CreateWindow = function(self, opts) return DummyWindow() end,
+        Notify = function(self, opts)
+            opts = opts or self
             pcall(function()
                 game.StarterGui:SetCore("SendNotification", {
-                    Title = opts.Title or "BF Hub",
-                    Text = opts.Content or "",
-                    Duration = opts.Duration or 4,
+                    Title = (opts and opts.Title) or "BF Hub",
+                    Text = (opts and (opts.Content or opts.Text)) or "",
+                    Duration = (opts and opts.Duration) or 4,
                 })
             end)
         end,
         Options = {},
+        Destroy = function() end,
     }
 end
 
 pcall(function()
     local body = HttpGet("https://raw.githubusercontent.com/dawid-scripts/Fluent/master/Addons/SaveManager.lua")
-    if body then SaveManager = loadstring(body)() end
+    if body then
+        local fn = loadstring(body)
+        if fn then SaveManager = fn() end
+    end
 end)
 pcall(function()
     local body = HttpGet("https://raw.githubusercontent.com/dawid-scripts/Fluent/master/Addons/InterfaceManager.lua")
-    if body then InterfaceManager = loadstring(body)() end
+    if body then
+        local fn = loadstring(body)
+        if fn then InterfaceManager = fn() end
+    end
 end)
 
-local Window = Fluent:CreateWindow({
-    Title = "BF Full Hub" .. (Fluent.Version and ("  " .. tostring(Fluent.Version)) or ""),
-    SubTitle = "Axion · No Key",
-    TabWidth = 160,
-    Size = UDim2.fromOffset(560, 420),
-    Acrylic = false,
-    Theme = "Dark",
-    MinimizeKey = Enum.KeyCode.LeftControl,
-})
+local Window
+do
+    local ok, win = pcall(function()
+        return Fluent:CreateWindow({
+            Title = "BF Full Hub" .. (Fluent.Version and ("  " .. tostring(Fluent.Version)) or ""),
+            SubTitle = "No Key",
+            TabWidth = 160,
+            Size = UDim2.fromOffset(560, 420),
+            Acrylic = false,
+            Theme = "Dark",
+            MinimizeKey = Enum.KeyCode.LeftControl,
+        })
+    end)
+    if ok and win then
+        Window = win
+        print("[BFHub] Fluent window ok")
+    else
+        warn("[BFHub] CreateWindow failed:", win)
+        Window = DummyWindow()
+    end
+end
+
+local function AddTabSafe(title, icon)
+    local ok, tab = pcall(function()
+        return Window:AddTab({ Title = title, Icon = icon })
+    end)
+    if ok and tab then return tab end
+    ok, tab = pcall(function()
+        return Window:AddTab({ Title = title })
+    end)
+    if ok and tab then return tab end
+    warn("[BFHub] AddTab failed", title)
+    return DummyTab()
+end
 
 local Tabs = {
-    Main = Window:AddTab({ Title = "Main", Icon = "home" }),
-    Farm = Window:AddTab({ Title = "Auto Farm", Icon = "swords" }),
-    Mastery = Window:AddTab({ Title = "Mastery", Icon = "target" }),
-    Bosses = Window:AddTab({ Title = "Bosses", Icon = "skull" }),
-    Raids = Window:AddTab({ Title = "Raids", Icon = "castle" }),
-    Quests = Window:AddTab({ Title = "Quests", Icon = "scroll" }),
-    Sea = Window:AddTab({ Title = "Sea Events", Icon = "waves" }),
-    Fruits = Window:AddTab({ Title = "Fruits", Icon = "apple" }),
-    Swords = Window:AddTab({ Title = "Swords", Icon = "sword" }),
-    Race = Window:AddTab({ Title = "Race / Haki", Icon = "user" }),
-    TP = Window:AddTab({ Title = "Teleport", Icon = "map-pin" }),
-    ESP = Window:AddTab({ Title = "ESP", Icon = "eye" }),
-    Combat = Window:AddTab({ Title = "Combat", Icon = "crosshair" }),
-    Fish = Window:AddTab({ Title = "Fishing", Icon = "fish" }),
-    Shop = Window:AddTab({ Title = "Shop / Craft", Icon = "shopping-cart" }),
-    Misc = Window:AddTab({ Title = "Misc", Icon = "settings" }),
+    Main = AddTabSafe("Main", "home"),
+    Farm = AddTabSafe("Auto Farm", "swords"),
+    Mastery = AddTabSafe("Mastery", "target"),
+    Bosses = AddTabSafe("Bosses", "skull"),
+    Raids = AddTabSafe("Raids", "castle"),
+    Quests = AddTabSafe("Quests", "scroll"),
+    Sea = AddTabSafe("Sea Events", "waves"),
+    Fruits = AddTabSafe("Fruits", "apple"),
+    Swords = AddTabSafe("Swords", "sword"),
+    Race = AddTabSafe("Race / Haki", "user"),
+    TP = AddTabSafe("Teleport", "map-pin"),
+    ESP = AddTabSafe("ESP", "eye"),
+    Combat = AddTabSafe("Combat", "crosshair"),
+    Fish = AddTabSafe("Fishing", "fish"),
+    Shop = AddTabSafe("Shop / Craft", "shopping-cart"),
+    Misc = AddTabSafe("Misc", "settings"),
 }
+
+-- always-on mini bar so farm can be toggled even if Fluent is invisible
+pcall(function()
+    local pg = LocalPlayer:WaitForChild("PlayerGui")
+    local old = pg:FindFirstChild("BFHubMini")
+    if old then old:Destroy() end
+    local gui = Instance.new("ScreenGui")
+    gui.Name = "BFHubMini"
+    gui.ResetOnSpawn = false
+    gui.IgnoreGuiInset = true
+    pcall(function()
+        if gethui then gui.Parent = gethui() else gui.Parent = pg end
+    end)
+    if not gui.Parent then gui.Parent = pg end
+    local bar = Instance.new("Frame")
+    bar.Size = UDim2.new(0, 210, 0, 36)
+    bar.Position = UDim2.new(0, 12, 0, 70)
+    bar.BackgroundColor3 = Color3.fromRGB(20, 20, 24)
+    bar.BorderSizePixel = 0
+    bar.Parent = gui
+    Instance.new("UICorner", bar).CornerRadius = UDim.new(0, 8)
+    local function miniBtn(text, x, flag)
+        local b = Instance.new("TextButton")
+        b.Size = UDim2.new(0, 96, 0, 28)
+        b.Position = UDim2.new(0, x, 0, 4)
+        b.BackgroundColor3 = Color3.fromRGB(40, 40, 48)
+        b.TextColor3 = Color3.new(1, 1, 1)
+        b.Font = Enum.Font.GothamBold
+        b.TextSize = 12
+        b.Text = text
+        b.Parent = bar
+        Instance.new("UICorner", b).CornerRadius = UDim.new(0, 6)
+        b.MouseButton1Click:Connect(function()
+            local v = not GetFlag(flag)
+            SetFlag(flag, v)
+            if flag == "AutoFarmLevel" and v then
+                SetFlag("AutoBuso", true)
+                SetFlag("AttackNoCD", true)
+                SetFlag("BringEnemy", true)
+                pcall(EnsureBuso)
+                pcall(EquipMelee)
+            end
+            b.BackgroundColor3 = v and Color3.fromRGB(40, 140, 70) or Color3.fromRGB(40, 40, 48)
+            pcall(function()
+                game.StarterGui:SetCore("SendNotification", {
+                    Title = "BFHub",
+                    Text = text .. (v and " ON" or " OFF"),
+                    Duration = 3,
+                })
+            end)
+        end)
+    end
+    miniBtn("Auto Farm", 6, "AutoFarmLevel")
+    miniBtn("No CD", 108, "AttackNoCD")
+end)
 
 local function Notify(title, content, duration)
     pcall(function()
@@ -1487,13 +1609,13 @@ local IslandCFrames = {
     ["Colosseum"] = CFrame.new(-11.311, 29.277, 2771.522),
     ["Underwater City"] = CFrame.new(-2850.201, 7.392, 5354.993),
     ["Shank Room"] = CFrame.new(-1442.166, 29.879, -28.355),
-    ["Mob Island"] = CFrame.new(-2850.201, 7.392, 5354.993),
+    ["Mob Island"] = CFrame.new(-5550.0, 16.0, 1576.0), -- Jean-Luc / Mob Leader
 
     -- Sea 2
     ["Kingdom of Rose"] = CFrame.new(-380.479, 77.22, 255.826), -- Cafe area / Rose hub
     ["Cafe"] = CFrame.new(-380.479, 77.22, 255.826),
     ["Green Zone"] = CFrame.new(-2245.0, 73.0, -2800.0), -- approximate from common hubs
-    ["Graveyard"] = CFrame.new(-9515.0, 142.0, 5786.0), -- near haunted-ish / adjust live
+    ["Graveyard"] = CFrame.new(-5494.0, 49.0, -795.0), -- Sea 2 Zombie island
     ["Snow Mountain"] = CFrame.new(753.143, 408.236, -5274.615),
     ["Hot and Cold"] = CFrame.new(-6127.654, 15.952, -5040.286), -- Punk Hazard style
     ["Cursed Ship"] = CFrame.new(923.0, 125.0, 32865.0), -- common cursed ship
@@ -1509,7 +1631,7 @@ local IslandCFrames = {
     ["Great Tree"] = CFrame.new(2681.274, 1682.809, -7190.985),
     ["Floating Turtle"] = CFrame.new(-13274.528, 531.821, -7579.223),
     ["Castle on the Sea"] = CFrame.new(-5083.26, 314.606, -3175.673),
-    ["Mansion"] = CFrame.new(-378.0, 331.0, 645.0), -- near castle / mansion access
+    ["Mansion"] = CFrame.new(-12471.0, 374.0, -7551.0), -- Floating Turtle mansion
     ["Haunted Castle"] = CFrame.new(-9515.372, 164.006, 5786.061),
     ["Ice Cream Island"] = CFrame.new(-902.568, 79.932, -10988.848),
     ["Peanut Island"] = CFrame.new(-2062.748, 50.474, -10232.568),
@@ -2311,9 +2433,12 @@ local function BringEnemy(mob)
         if mob:FindFirstChild("Humanoid") then
             mob.Humanoid.WalkSpeed = 0
             mob.Humanoid.JumpPower = 0
-            if mob.Humanoid:FindFirstChild("Animator") then
-                pcall(function() mob.Humanoid.Animator:Destroy() end)
-            end
+            pcall(function()
+                local an = mob.Humanoid:FindFirstChildOfClass("Animator")
+                if an then
+                    for _, t in ipairs(an:GetPlayingAnimationTracks()) do t:Stop(0) end
+                end
+            end)
             pcall(function()
                 mob.Humanoid:ChangeState(11)
                 mob.Humanoid:ChangeState(14)
@@ -2350,9 +2475,12 @@ task.spawn(function()
                             hrp.Transparency = 1
                             hum.WalkSpeed = 0
                             hum.JumpPower = 0
-                            if hum:FindFirstChild("Animator") then
-                                pcall(function() hum.Animator:Destroy() end)
-                            end
+                            pcall(function()
+                                local an = hum:FindFirstChildOfClass("Animator")
+                                if an then
+                                    for _, t in ipairs(an:GetPlayingAnimationTracks()) do t:Stop(0) end
+                                end
+                            end)
                             pcall(function()
                                 hum:ChangeState(11)
                                 hum:ChangeState(14)
@@ -2576,7 +2704,7 @@ function CheckQuest()
             Name = "Snow Bandit [Lv. 90]"
             QuestName = "SnowQuest"
             LevelQuest = 1
-            NameMon = "Snow Bandits"
+            NameMon = "Snow Bandit"
             CFrameMon = CFrame.new(1289, 150, - 1442)
             VectorMon = Vector3.new(1289, 106, - 1442)
             CFrameQuest = CFrame.new(1386, 87, - 1297)
@@ -2661,7 +2789,7 @@ function CheckQuest()
             VectorMon = Vector3.new(- 1265, 8, - 3270)
             CFrameQuest = CFrame.new(- 1576, 8, - 2985)
             VectorQuest = Vector3.new(- 1576, 8, - 2985)
-        elseif v288 == 300 or v288 <= 329 then
+        elseif v288 == 300 or v288 <= 324 then
             LevelFarm = 16
             Name = "Military Soldier [Lv. 300]"
             QuestName = "MagmaQuest"
@@ -2706,7 +2834,7 @@ function CheckQuest()
             Name = "God\'s Guard [Lv. 450]"
             QuestName = "SkyExp1Quest"
             LevelQuest = 1
-            NameMon = "God\'s Guards"
+            NameMon = "God\'s Guard"
             CFrameMon = CFrame.new(- 4698, 845, - 1912)
             VectorMon = Vector3.new(- 4698, 845, - 1912)
             CFrameQuest = CFrame.new(- 4722, 845, - 1954)
@@ -2716,7 +2844,7 @@ function CheckQuest()
             Name = "Shanda [Lv. 475]"
             QuestName = "SkyExp1Quest"
             LevelQuest = 2
-            NameMon = "Shandas"
+            NameMon = "Shanda"
             CFrameMon = CFrame.new(- 7685, 5567, - 502)
             VectorMon = Vector3.new(- 7685, 5567, - 502)
             CFrameQuest = CFrame.new(- 7862, 5546, - 380)
@@ -4044,9 +4172,12 @@ local function DoQuestFarmStep()
             hrp.CanCollide = false
             target.Humanoid.JumpPower = 0
             target.Humanoid.WalkSpeed = 0
-            if target.Humanoid:FindFirstChild("Animator") then
-                pcall(function() target.Humanoid.Animator:Destroy() end)
-            end
+            pcall(function()
+                local an = target.Humanoid:FindFirstChildOfClass("Animator")
+                if an then
+                    for _, t in ipairs(an:GetPlayingAnimationTracks()) do t:Stop(0) end
+                end
+            end)
             target.Humanoid:ChangeState(11)
             target.Humanoid:ChangeState(14)
         end)
@@ -4533,21 +4664,45 @@ local function EquipNamed(name)
     return false
 end
 
--- Bartilo: CommF BartiloQuestProgress returns 0/1/2/3
+local function HasTool(name)
+    if not name then return false, nil end
+    local function scan(folder)
+        if not folder then return nil end
+        for _, t in ipairs(folder:GetChildren()) do
+            if t.Name == name or t.Name:find(name, 1, true) then
+                return t
+            end
+        end
+        return nil
+    end
+    local t = scan(Character) or scan(LocalPlayer:FindFirstChild("Backpack"))
+    if t then return true, t end
+    return CountItem(name) > 0, nil
+end
+
+local function EquipOrFind(name)
+    local ok, t = HasTool(name)
+    if t and Humanoid then
+        pcall(function() Humanoid:EquipTool(t) end)
+        return true
+    end
+    return ok
+end
+
+-- Bartilo: 50 Swan Pirate → 8 factory plates → Jeremy. Track via quest GUI, not a fake remote.
 local BartiloStep = 1
 function RunBartilo()
     if not World2 then return end
     EnsureFarmLoadout()
-    local prog = CommF("BartiloQuestProgress", "Bartilo")
-    if type(prog) == "number" then
-        if prog >= 3 then Notify("Bartilo", "Done") return end
-        BartiloStep = (prog == 0 and 1) or (prog + 1)
-    end
     local vis, title = GetQuestGuiTitle()
     if title then
         if title:find("Jeremy") then BartiloStep = 3
-        elseif title:find("Plate") or title:find("Factory") then BartiloStep = 2
+        elseif title:find("Plate") or title:find("Factory") or title:find("switch") then BartiloStep = 2
         elseif title:find("Swan") then BartiloStep = 1
+        end
+    elseif not vis then
+        if BartiloStep < 3 then
+            CommF("StartQuest", "BartiloQuest", BartiloStep)
         end
     end
     if BartiloStep == 1 then
@@ -4558,112 +4713,130 @@ function RunBartilo()
     elseif BartiloStep == 2 then
         TweenTo(CFrame.new(295, 73, -56), 400)
         TouchAround(Vector3.new(295, 73, -56), 220, function(n)
-            return n:find("Plate") or n:find("Button") or n:find("Bartilo")
+            return n:find("Plate") or n:find("Button") or n:find("Switch")
         end)
+        -- plates done → quest GUI flips to Jeremy
+        if not vis then BartiloStep = 3 end
         return
     else
         CommF("StartQuest", "BartiloQuest", 3)
         if FarmNamedMob("Jeremy", true) then return end
         TweenTo(CFrame.new(-1835, 7, -2742), 400)
         TalkNPC("Bartilo")
-        FarmNamedMob("Jeremy", true)
     end
 end
 
--- Saber 5-step puzzle (Jungle buttons → Desert torch → Cup/Sick Man → Rich Man/Mob Leader → Expert)
-local SaberPhase = 1
+-- Saber 5-step (wiki 2026): 5 jungle buttons → torch → desert cup → fill cup → Sick Man → Rich Man → Mob Leader → relic door → Expert
 function RunSaber()
     if not World1 then return end
     EnsureFarmLoadout()
+    if EquipOrFind("Saber") and not FindMobByName("Saber Expert", 2000) then
+        Notify("Saber", "Already have Saber")
+        return
+    end
     local expert = FindMobByName("Saber Expert", 8000)
     if expert then
         FarmNamedMob("Saber Expert", false)
         return
     end
-    CommF("ProQuestProgress", "GetQuest")
+    local hasRelic = HasTool("Relic") or HasTool("Ancient Relic")
+    local hasCup = HasTool("Cup")
+    local hasTorch = HasTool("Torch")
     local p = CommF("ProQuestProgress")
-    if type(p) == "number" and p > 0 then SaberPhase = math.clamp(p, 1, 5) end
+    if type(p) == "table" then
+        -- some versions return a dict of flags
+    end
 
-    if SaberPhase <= 1 then
-        -- 5 green jungle buttons
-        local spots = {
-            CFrame.new(-1612.56, 36.98, 148.72),
-            CFrame.new(-1602, 37, 152),
-            CFrame.new(-1181.2, 6.1, -263.4),
-            CFrame.new(-1237, 6, -486),
-            CFrame.new(-1496, 39, 35),
-        }
-        for _, cf in ipairs(spots) do
-            TweenTo(cf, 420)
-            TouchAround(cf.Position, 25)
-            task.wait(0.15)
-        end
-        -- jungle house hole / torch
-        TweenTo(CFrame.new(-1602, 37, 152), 400)
-        TouchAround(Vector3.new(-1602, 37, 152), 40, function(n)
-            return n:find("Torch") or n:find("Open") or n:find("Button") or n:find("Plate")
+    if hasRelic then
+        TweenTo(CFrame.new(-1405.288, 29.852, 5.201), 400)
+        EquipOrFind("Relic")
+        EquipOrFind("Ancient Relic")
+        TouchAround(Vector3.new(-1405, 30, 5), 40, function(n)
+            return n:find("Relic") or n:find("Hole") or n:find("Saber") or n:find("Open")
         end)
-        SaberPhase = 2
+        FarmNamedMob("Saber Expert", false)
         return
-    elseif SaberPhase == 2 then
-        -- desert collapsed house, burn curtain, grab cup
+    end
+
+    -- after Sick Man, Rich Man wants Mob Leader dead
+    local mobLeader = FindMobByName("Mob Leader", 8000)
+    if mobLeader then
+        TalkNPC("Rich Man")
+        CommF("ProQuestProgress", "RichMan")
+        FarmNamedMob("Mob Leader", false)
+        return
+    end
+
+    if hasCup then
+        -- fill under ice drip then give to Sick Man
+        TweenTo(CFrame.new(1289, 87, -1297), 420)
+        EquipOrFind("Cup")
+        TouchAround(Vector3.new(1289, 87, -1297), 90, function(n)
+            return n:find("Cup") or n:find("Ice") or n:find("Water") or n:find("Leak")
+        end)
+        TalkNPC("Sick Man")
+        CommF("ProQuestProgress", "SickMan")
+        TalkNPC("Rich Man")
+        TweenTo(CFrame.new(-5550, 16, 1576), 420)
+        return
+    end
+
+    if hasTorch then
+        -- desert collapsed house: equip torch, burn curtain, grab cup
+        EquipOrFind("Torch")
         TweenTo(CFrame.new(932, 7, 4484), 420)
         TouchAround(Vector3.new(932, 7, 4484), 80, function(n)
             return n:find("Cup") or n:find("Torch") or n:find("Door") or n:find("Curtain") or n:find("Relic")
         end)
-        SaberPhase = 3
         return
-    elseif SaberPhase == 3 then
-        -- frozen village cave fill cup, Sick Man
-        TweenTo(CFrame.new(1289, 150, -1442), 420)
-        TouchAround(Vector3.new(1289, 87, -1297), 90, function(n)
-            return n:find("Cup") or n:find("Ice") or n:find("Water")
-        end)
-        TalkNPC("Sick Man")
-        CommF("ProQuestProgress", "SickMan")
-        SaberPhase = 4
-        return
-    elseif SaberPhase == 4 then
-        TalkNPC("Rich Man")
-        CommF("ProQuestProgress", "Bought")
-        local mob = FindMobByName("Mob Leader", 6000)
-        if mob then
-            FarmNamedMob("Mob Leader", false)
-            return
-        end
-        TweenTo(CFrame.new(-5550, 16, 1576), 420) -- Jean-Luc
-        if not FindMobByName("Mob Leader", 4000) then
-            SaberPhase = 5
-        end
-        return
-    else
-        TweenTo(CFrame.new(-1405.288, 29.852, 5.201), 400)
-        TouchAround(Vector3.new(-1405, 30, 5), 30, function(n)
-            return n:find("Relic") or n:find("Saber") or n:find("Open")
-        end)
-        FarmNamedMob("Saber Expert", false)
     end
-end
 
+    -- step 1: 5 green jungle buttons then hole in quest house for torch
+    local spots = {
+        CFrame.new(-1612.56, 36.98, 148.72),
+        CFrame.new(-1602, 37, 152),
+        CFrame.new(-1181.2, 6.1, -263.4),
+        CFrame.new(-1237, 6, -486),
+        CFrame.new(-1496, 39, 35),
+    }
+    for _, cf in ipairs(spots) do
+        TweenTo(cf, 420)
+        TouchAround(cf.Position, 25, function(n)
+            return n:find("Button") or n:find("Plate") or n:find("Switch") or n:find("Green")
+        end)
+        task.wait(0.12)
+    end
+    TweenTo(CFrame.new(-1602, 37, 152), 400)
+    TouchAround(Vector3.new(-1602, 37, 152), 40, function(n)
+        return n:find("Torch") or n:find("Open") or n:find("Button") or n:find("Plate") or n:find("Hole")
+    end)
+    CommF("ProQuestProgress", "GetQuest")
+end
 
 function RunRengoku()
     if not World2 then return end
     EnsureFarmLoadout()
-    if CollectItemsByName("Fire Essence") then return end
-    if CountItem("Fire Essence") < 1 then
-        if not FarmNamedMob("Magma Admiral", true) then
-            FarmNamedMob("Core", true)
-        end
+    if EquipOrFind("Rengoku") then
+        Notify("Rengoku", "Already have Rengoku")
         return
     end
-    TweenTo(CFrame.new(5500.0, 40.0, -6200.0), 400)
-    pcall(function()
-        for _, obj in ipairs(workspace:GetDescendants()) do
-            if obj.Name:find("Rengoku") or obj.Name:find("Secret") then
-                local cd = obj:FindFirstChildWhichIsA("ClickDetector", true)
-                if cd then pcall(fireclickdetector, cd) end
-            end
-        end
+    -- Hidden Key: 5% Awakened Ice Admiral, lower from Snow Lurker / Arctic Warrior
+    if not (HasTool("Hidden Key") or CountItem("Hidden Key") > 0) then
+        if FarmNamedMob("Awakened Ice Admiral", false) then return end
+        if FarmNamedMob("Snow Lurker", true) then return end
+        if FarmNamedMob("Arctic Warrior", true) then return end
+        TweenTo(CFrame.new(5669, 28, -6482), 400)
+        return
+    end
+    -- chest is through the wall beside Ice Admiral stairs
+    EquipOrFind("Hidden Key")
+    TweenTo(CFrame.new(5493, 29, -6177), 400)
+    TouchAround(Vector3.new(5493, 29, -6177), 80, function(n)
+        return n:find("Chest") or n:find("Key") or n:find("Rengoku") or n:find("Door") or n:find("Wall")
+    end)
+    TweenTo(CFrame.new(6577, 29, -6223), 400)
+    TouchAround(Vector3.new(6577, 29, -6223), 60, function(n)
+        return n:find("Chest") or n:find("Key") or n:find("Rengoku")
     end)
 end
 
@@ -4679,96 +4852,215 @@ end
 function RunYama()
     if not World3 then return end
     EnsureFarmLoadout()
+    if EquipOrFind("Yama") then
+        Notify("Yama", "Already have Yama")
+        return
+    end
+    -- 20 elites = chance, 30 = guaranteed. Then pull Yama from Secret Temple (Haunted Castle).
     local progress = CommF("EliteHunter", "Progress")
-    if type(progress) ~= "number" or progress < 30 then
+    if type(progress) ~= "number" then progress = 0 end
+    if progress < 30 then
+        Notify("Yama", tostring(progress) .. "/30 Elite")
         if RunEliteHunter() then return end
         CommF("EliteHunter")
         return
     end
-    local cap = FindMobByName("Cursed Captain", 8000)
-    if cap then FarmNamedMob("Cursed Captain", false) return end
-    TweenTo(CFrame.new(-9515.0, 164.0, 5786.0), 400)
+    -- pull sword in haunted castle temple (Yama is in the ground)
+    TweenTo(CFrame.new(-9513, 172, 6079), 400)
     pcall(function()
         for _, obj in ipairs(workspace:GetDescendants()) do
-            if obj.Name:find("Yama") then
-                local cd = obj:FindFirstChildWhichIsA("ClickDetector", true)
-                if cd then pcall(fireclickdetector, cd) end
-            end
-        end
-    end)
-end
-
-function RunTushita()
-    if not World3 then return end
-    EnsureFarmLoadout()
-    if FarmNamedMob("Longma", false) then return end
-    if FarmNamedMob("Cake Queen", true) then return end
-    CommF("TushitaGate")
-    TweenTo(CFrame.new(5310.0, 1005.0, 390.0), 400)
-    pcall(function()
-        for _, obj in ipairs(workspace:GetDescendants()) do
-            local n = obj.Name
-            if n:find("Tushita") or n:find("Grail") or n:find("Torch") then
-                local cd = obj:FindFirstChildWhichIsA("ClickDetector", true)
-                if cd then pcall(fireclickdetector, cd) end
-                if obj:IsA("BasePart") and HumanoidRootPart then
-                    pcall(firetouchinterest, HumanoidRootPart, obj, 0)
-                    pcall(firetouchinterest, HumanoidRootPart, obj, 1)
+            if obj.Name == "Yama" or obj.Name:find("Yama") then
+                local part = obj:IsA("BasePart") and obj or obj:FindFirstChildWhichIsA("BasePart", true)
+                if part and HumanoidRootPart and (part.Position - HumanoidRootPart.Position).Magnitude < 250 then
+                    TweenTo(part.CFrame, 350)
+                    pcall(firetouchinterest, HumanoidRootPart, part, 0)
+                    pcall(firetouchinterest, HumanoidRootPart, part, 1)
+                    local cd = obj:FindFirstChildWhichIsA("ClickDetector", true)
+                    if cd then pcall(fireclickdetector, cd) end
+                    local pp = obj:FindFirstChildWhichIsA("ProximityPrompt", true)
+                    if pp then pcall(fireproximityprompt, pp) end
+                    return
                 end
             end
         end
     end)
+    FarmNamedMob("Ghost", false)
+end
+
+-- Tushita (wiki): Lv 2000, rip_indra ALIVE → Hydra waterfall temple → ghosts → Holy Torch → 5 torches on Floating Turtle in order → Longma
+local TushitaTorch = {
+    CFrame.new(-13232, 333, -7627),   -- 1 bridge / dock
+    CFrame.new(-12107, 332, -10549),  -- 2 near Jungle Pirate / Beautiful Pirate bridge
+    CFrame.new(-12684, 391, -9902),   -- 3 pineapple / Jungle Pirate houses
+    CFrame.new(-13545, 470, -6917),   -- 4 Mythological Pirate shipwreck
+    CFrame.new(-13479, 333, -7905),   -- 5 Forest Pirate house
+}
+function RunTushita()
+    if not World3 then return end
+    EnsureFarmLoadout()
+    if EquipOrFind("Tushita") then
+        Notify("Tushita", "Already have Tushita")
+        return
+    end
+    local longma = FindMobByName("Longma", 8000)
+    if longma then
+        FarmNamedMob("Longma", false)
+        return
+    end
+    if HasTool("Holy Torch") then
+        EquipOrFind("Holy Torch")
+        for _, cf in ipairs(TushitaTorch) do
+            TweenTo(cf, 500)
+            TouchAround(cf.Position, 70, function(n)
+                return n:find("Torch") or n:find("Holy") or n:find("Fire")
+            end)
+            task.wait(0.15)
+        end
+        return
+    end
+    local indra = FindMobByName("rip_indra", 20000) or FindMobByName("rip_indra True Form", 20000)
+    local ghosts = FindMobByName("Ghost", 4000)
+    if ghosts then
+        FarmNamedMob("Ghost", false)
+        return
+    end
+    if indra then
+        -- waterfall bottom → break stone door → secret temple
+        TweenTo(CFrame.new(5257.2, 601.6, 344.9), 500)
+        TouchAround(Vector3.new(5257, 601, 345), 80, function(n)
+            return n:find("Door") or n:find("Stone") or n:find("Gate") or n:find("Torch")
+        end)
+        TweenTo(CFrame.new(5665.0, 20.0, 390.0), 500)
+        local near = GetNearestEnemy(80)
+        if near then AttackTarget(near) FastAttack() end
+        return
+    end
+    -- need indra spawned (anyone's chalice works)
+    if HasTool("God's Chalice") or HasTool("Gods Chalice") then
+        EquipOrFind("God's Chalice")
+        TweenTo(CFrame.new(-5083, 314, -3175), 450)
+        TouchAround(Vector3.new(-5083, 314, -3175), 80, function(n)
+            return n:find("Chalice") or n:find("Altar") or n:find("Indra") or n:find("Place")
+        end)
+        return
+    end
+    Notify("Tushita", "Need rip_indra spawned (God's Chalice)")
+    RunGodChalice()
 end
 
 function RunCDK()
     if not World3 then return end
     EnsureFarmLoadout()
-    -- Crypt Master behind Castle mansion → scroll trials (Yama / Tushita 350)
-    CommF("CDKQuest")
-    CommF("CDKQuest", "OpenProgress")
-    local prog = CommF("CDKQuest", "Progress")
-    TalkNPC("Crypt Master")
-    EquipNamed("Yama")
-    EquipNamed("Tushita")
-    -- Haze of Misery: purple-marked NPCs
-    local marked = GetNearestEnemy(400)
-    if marked and (marked:FindFirstChild("Haze") or marked:GetAttribute("Haze") or (marked:FindFirstChild("Head") and marked.Head:FindFirstChildWhichIsA("BillboardGui"))) then
-        AttackTarget(marked) FastAttack()
+    if EquipOrFind("Cursed Dual Katana") then
+        Notify("CDK", "Already have CDK")
         return
     end
-    -- Fear the Reaper
-    if CountItem("Hallow Essence") >= 1 then
-        CommF("SoulReaper")
-        FarmNamedMob("Soul Reaper", false)
+    local lv = 0
+    pcall(function() lv = LocalPlayer.Data.Level.Value end)
+    if lv < 2200 then
+        Notify("CDK", "Need Lv 2200 + Yama/Tushita 350")
         return
     end
-    -- Soulless: Cake Queen
-    if FarmNamedMob("Cake Queen", true) then return end
-    -- Sense of Duty: pirate raid
-    if World3 then
-        TweenTo(CFrame.new(-5418, 314, -2824), 400)
-        local raid = GetNearestEnemy(200)
-        if raid then AttackTarget(raid) FastAttack() return end
-    end
-    -- Docks Legend
-    TalkNPC("Boat Dealer")
-    TalkNPC("Luxury Boat Dealer")
-    -- Hell / Heaven
-    if FarmNamedMob("Hell's Messenger", false) then return end
-    if FarmNamedMob("Heaven's Guardian", false) then return end
-    -- final cursed skeleton (Yama or Tushita only)
-    local skel = FindMobByName("Cursed Skeleton", 4000)
-    if skel then
+
+    -- environment-first (trial dimensions / final boss)
+    if FindMobByName("Cursed Skeleton", 6000) then
         if not EquipNamed("Yama") then EquipNamed("Tushita") end
         FarmNamedMob("Cursed Skeleton", false)
         return
     end
-    TweenTo(CFrame.new(-5125, 315, -3150), 400)
-    CommF("CDKQuest", "OpenDoor")
+    if FindMobByName("Hell's Messenger", 6000) then
+        FarmNamedMob("Hell's Messenger", false)
+        TouchAround(HumanoidRootPart.Position, 120, function(n) return n:find("Torch") end)
+        return
+    end
+    if FindMobByName("Heaven's Guardian", 6000) then
+        FarmNamedMob("Heaven's Guardian", false)
+        TouchAround(HumanoidRootPart.Position, 120, function(n) return n:find("Torch") end)
+        return
+    end
+
+    local yamaOn = Character and Character:FindFirstChild("Yama")
+    local tushitaOn = Character and Character:FindFirstChild("Tushita")
+    if not yamaOn and not tushitaOn then
+        if not EquipNamed("Yama") then EquipNamed("Tushita") end
+        yamaOn = Character and Character:FindFirstChild("Yama")
+        tushitaOn = Character and Character:FindFirstChild("Tushita")
+    end
+
+    -- Tushita trials
+    if tushitaOn then
+        local queen = FindMobByName("Cake Queen", 8000)
+        if queen then
+            FarmNamedMob("Cake Queen", true) -- Soulless: hit + kill within 2 min song
+            return
+        end
+        -- Sense of Duty: pirate raid NPC at Castle on the Sea
+        TweenTo(CFrame.new(-5083, 314, -3175), 400)
+        local raid = GetNearestEnemy(180)
+        if raid and not raid.Name:find("rip_indra") then
+            AttackTarget(raid) FastAttack()
+            return
+        end
+        -- Docks Legend: talk 3 boat dealers, last page "Pardon me"
+        TalkNPC("Boat Dealer")
+        TalkNPC("Luxury Boat Dealer")
+        TweenTo(CFrame.new(-16218, 9, 445), 400)
+        TalkNPC("Boat Dealer")
+        return
+    end
+
+    -- Yama trials
+    if yamaOn then
+        -- Haze of Misery: purple-marked NPCs
+        local enemies = workspace:FindFirstChild("Enemies")
+        if enemies then
+            for _, m in ipairs(enemies:GetChildren()) do
+                local marked = m:FindFirstChild("Haze") or m:GetAttribute("Haze")
+                if not marked then
+                    local head = m:FindFirstChild("Head")
+                    marked = head and head:FindFirstChildWhichIsA("BillboardGui")
+                end
+                if marked and m:FindFirstChild("Humanoid") and m.Humanoid.Health > 0 then
+                    local hrp = m:FindFirstChild("HumanoidRootPart")
+                    if hrp then
+                        TweenTo(hrp.CFrame * CFrame.new(0, 10, 0), 450)
+                        AttackTarget(m) FastAttack()
+                        return
+                    end
+                end
+            end
+        end
+        -- Fear the Reaper: summon Soul Reaper with Hallow Essence, then LET IT KILL YOU
+        if HasTool("Hallow Essence") or CountItem("Hallow Essence") > 0 then
+            EquipOrFind("Hallow Essence")
+            TweenTo(CFrame.new(-9513, 172, 6079), 400)
+            TouchAround(Vector3.new(-9513, 172, 6079), 80, function(n)
+                return n:find("Grave") or n:find("Essence") or n:find("Hallow") or n:find("Reaper")
+            end)
+            local reaper = FindMobByName("Soul Reaper", 8000)
+            if reaper and reaper:FindFirstChild("HumanoidRootPart") then
+                -- stand still, do not attack — trial requires being defeated
+                TweenTo(reaper.HumanoidRootPart.CFrame * CFrame.new(0, 0, 4), 300)
+            end
+            return
+        end
+        -- Pain and Suffering: take 8-10k damage while holding Yama
+        local mob = GetNearestEnemy(80)
+        if mob then
+            TweenTo(mob.HumanoidRootPart.CFrame * CFrame.new(0, 0, 6), 250)
+        else
+            TweenTo(CFrame.new(-9513, 172, 6079), 400)
+        end
+        return
+    end
+
+    -- start: Crypt Master behind Floating Turtle mansion
+    TweenTo(CFrame.new(-12471, 374, -7551), 450)
+    TalkNPC("Crypt Master")
+    CommF("CDKQuest")
 end
 
 function RunZou()
-    -- Third Sea access: ZQuestProgress + rip_indra 50% + Mr. Captain
     if World3 then Notify("Zou", "Already Sea 3") return end
     if World1 then CommF("TravelDressrosa") return end
     EnsureFarmLoadout()
@@ -4789,7 +5081,6 @@ function RunZou()
         return
     end
     TalkNPC("King Red Head")
-    -- 8 prison buttons
     if HumanoidRootPart then
         TouchAround(HumanoidRootPart.Position, 70, function(n)
             return n:find("Button") or n:find("Plate") or n:find("Switch")
@@ -4811,7 +5102,7 @@ function RunDojo()
         local b = net:FindFirstChild("RF/DragonHunter")
         if b then b:InvokeServer() end
     end)
-    TweenTo(CFrame.new(-16218, 9, 445), 420) -- Tiki sage
+    TweenTo(CFrame.new(-16218, 9, 445), 420)
 end
 
 function RunDraco(stage)
@@ -4832,7 +5123,6 @@ function RunDraco(stage)
 end
 
 function RunUnlockDough()
-    -- Dough King = Sweet Chalice (God's Chalice + 10 Conjured Cocoa) + 500 cake + drip_mama
     if CountItem("Sweet Chalice") < 1 then
         if CountItem("God's Chalice") < 1 and CountItem("Gods Chalice") < 1 then
             RunEliteHunter()
@@ -4844,8 +5134,9 @@ function RunUnlockDough()
             end
             return
         end
+        TalkNPC("drip_mama")
+        TalkNPC("Drip Mama")
         CommF("SweetChalice")
-        CommF("Craft", "Sweet Chalice")
         pcall(function()
             local net = GetNet and GetNet()
             local rf = net and net:FindFirstChild("RF/Craft")
@@ -4855,7 +5146,6 @@ function RunUnlockDough()
     end
     RunCakePrince()
     TalkNPC("drip_mama")
-    TalkNPC("Drip Mama")
     CommF("RaidsNpc", "Select", "Dough")
 end
 
@@ -4870,23 +5160,29 @@ function RunUnlockPhoenix()
 end
 
 function RunLawRaid()
-    CommF("RaidsNpc", "Select", "Law")
-    CommF("RaidsNpc")
+    -- Law raid is its own chip / dungeon, not a standard awakening raid
+    CommF("LawRaid")
+    CommF("StartRaid", "Law")
     if World2 then
         TweenTo(CFrame.new(-6438.735, 250.494, -4501.507), 400)
     elseif World3 then
         TweenTo(CFrame.new(-5050.0, 314.0, -3150.0), 400)
     end
+    local mob = GetNearestEnemy(400)
+    if mob then
+        TweenTo(mob.HumanoidRootPart.CFrame * CFrame.new(0, 12, 0), 480)
+        AttackTarget(mob)
+        FastAttack()
+    end
 end
 
 function RunGodChalice()
-    if CountItem("God's Chalice") >= 1 or CountItem("Gods Chalice") >= 1 then
+    if CountItem("God's Chalice") >= 1 or CountItem("Gods Chalice") >= 1 or HasTool("God's Chalice") then
         Notify("Chalice", "Already have God's Chalice")
         return
     end
     EnsureFarmLoadout()
     if not RunEliteHunter() then
-        -- Death King / elite
         FarmNamedMob("Deandre", true)
     end
 end
@@ -4911,31 +5207,31 @@ function RunCraftLeviathan()
             for _, n in ipairs(names) do rf:InvokeServer(n) end
         end
     end)
-    for _, n in ipairs(names) do
-        CommF("Craft", n)
-        CommF("CraftItem", n)
-    end
 end
-
 
 function RunSkullGuitar()
     if not World3 then return end
     EnsureFarmLoadout()
+    if EquipOrFind("Skull Guitar") then
+        Notify("Skull Guitar", "Already have it")
+        return
+    end
+    -- Haunted Castle piano + grave puzzle. Farm haunted mobs for ectoplasm / progress, click piano.
     TweenTo(CFrame.new(-9515.0, 164.0, 5786.0), 400)
     pcall(function()
         for _, obj in ipairs(workspace:GetDescendants()) do
             if obj.Name:find("Piano") or obj.Name:find("Guitar") or obj.Name:find("Skull") then
                 local cd = obj:FindFirstChildWhichIsA("ClickDetector", true)
                 if cd then pcall(fireclickdetector, cd) end
+                local pp = obj:FindFirstChildWhichIsA("ProximityPrompt", true)
+                if pp then pcall(fireproximityprompt, pp) end
             end
         end
     end)
-    CommF("GuitarPuzzle")
     if FarmNamedMob("Reborn Skeleton", true) then return end
     if FarmNamedMob("Living Zombie", true) then return end
     if FarmNamedMob("Demonic Soul", true) then return end
     FarmNamedMob("Posessed Mummy", true)
-    CollectItemsByName("Ectoplasm")
 end
 
 local SeaEventNames = {
@@ -5008,7 +5304,6 @@ function RunPrehistoric()
                 if rf then rf:InvokeServer() end
             end
         end)
-        CommF("DragonHunter")
         return true
     end
     Notify("Prehistoric", "Not in this server")
@@ -5054,9 +5349,8 @@ function RunSubmergedAccess()
         local rf = net and net:FindFirstChild("RF/SubmarineWorkerSpeak")
         if rf then rf:InvokeServer() end
     end)
-    CommF("SubmarineTravel", "Submerged")
-    CommF("TravelToSubmergedIsland")
-    CommF("Travel", "Submerged Island")
+    TalkNPC("Submarine Worker")
+    TalkNPC("Submarine")
     local loc = GetWorldOrigin("Submerged")
     local cf = GetPartCF(loc)
     if cf then TweenTo(cf, 500) return end
@@ -5103,11 +5397,6 @@ function RunFishing()
             return
         end
     end)
-    local bait = GetFlag("SelectBait")
-    if bait then CommF("FishingBait", bait) end
-    CommF("FishingRequest", "Cast")
-    CommF("StartCasting")
-    CommF("FishingRequest", "Catch")
     pcall(function()
         VirtualUser:CaptureController()
         VirtualUser:ClickButton1(Vector2.new())
@@ -5164,9 +5453,9 @@ function RunMastery(mode)
 end
 
 function RunObservation()
-    CommF("Ken")
-    CommF("KenTalk", "Start")
-    CommF("KenTalk", true)
+    if Character and not (Character:FindFirstChild("Ken") or Character:FindFirstChild("Observation")) then
+        CommF("Ken")
+    end
     local mob = GetNearestEnemy(90)
     if not mob then
         CheckQuest()
@@ -5178,19 +5467,24 @@ function RunObservation()
 end
 
 function RunRaceV3()
-    CommF("ActivateAbility")
     CommF("Wenlocktoad", "1")
     CommF("Wenlocktoad", "2")
     CommF("Wenlocktoad", "3")
+    CommF("ActivateAbility")
 end
 
 function RunRaceV4()
     CommF("ActivateAbility")
     RequestEntrance(ENTRANCE.TempleTime)
     TweenTo(CFrame.new(28286.0, 14896.0, 102.0), 500)
-    CommF("RaceV4Progress")
-    CommF("Trial", "Start")
+    -- enter the trial door for current race; farm whatever spawned inside
+    TouchAround(Vector3.new(28286, 14896, 102), 80, function(n)
+        return n:find("Trial") or n:find("Door") or n:find("Gate") or n:find("Race")
+    end)
+    local m = GetNearestEnemy(250)
+    if m then AttackTarget(m) FastAttack() end
 end
+
 
 function HopServer()
     pcall(function()
@@ -5437,9 +5731,11 @@ SpawnFlagLoop("AutoBuso", RunHakiAuto, 1.0)
 
 -- material-ish farms
 SpawnFlagLoop("AutoFarmMaterial", function()
-    FarmNamedMob("Pirate", true)
-    CollectItemsByName("Magnet")
-end, 0.35)
+    EnsureFarmLoadout()
+    CheckQuest()
+    if NameMon and FarmNamedMob(NameMon, true) then return end
+    if CFrameMon then TweenTo(CFrameMon, 400) end
+end, 0.15)
 
 -- sea events best-effort
 SpawnFlagLoop("AutoTerrorShark", function() RunSeaEvent("Terror") end, 0.2)
@@ -5488,10 +5784,13 @@ SpawnFlagLoop("AutoBartilo", function() RunBartilo() end, 0.25)
 SpawnFlagLoop("AutoCitizen", function()
     if not World2 then return end
     EnsureFarmLoadout()
-    CommF("StartQuest", "CitizenQuest", 1)
-    CommF("CitizenQuestProgress", "Citizen")
-    CommF("DressrosaQuestProgress")
+    -- Citizen = Bartilo done + $1M then Don Swan in mansion
+    if not FindMobByName("Don Swan", 8000) then
+        RunBartilo()
+    end
     RequestEntrance(ENTRANCE.Mansion)
+    TalkNPC("Citizen")
+    CommF("StartQuest", "CitizenQuest", 1)
     if not FarmNamedMob("Don Swan", true) then
         TweenTo(CFrame.new(2284, 15, 905), 400)
     end
@@ -5499,7 +5798,7 @@ end, 0.25)
 
 SpawnFlagLoop("AutoEliteQuest", function() RunEliteHunter() end, 0.2)
 
--- CDK / Yama / Tushita: EliteHunter Progress + DoneT1/T2/T3 + TushitaGate
+-- CDK / Yama / Tushita: wiki steps (elites, indra+torches, crypt trials)
 SpawnFlagLoop("AutoCDK", function() RunCDK() end, 0.3)
 SpawnFlagLoop("AutoTushita", function() RunTushita() end, 0.3)
 SpawnFlagLoop("AutoYama", function() RunYama() end, 0.25)
@@ -5896,9 +6195,6 @@ end)
 local function FarmAny(namePart, bring)
     bring = bring ~= false
     local mob = FindMobByName and FindMobByName(namePart, 8000)
-    if not mob then
-        mob = GetNearestEnemy(2500)
-    end
     if not mob or not mob:FindFirstChild("HumanoidRootPart") then return false end
     local hrp = mob.HumanoidRootPart
     pcall(function()
@@ -5966,11 +6262,8 @@ SpawnFlagLoop("AutoCollectDragonEggs", function()
     if CollectItemsByName then CollectItemsByName("Egg") end
 end, 1)
 SpawnFlagLoop("AutoCompleteTrial", function()
-    CommF("Trial", "Start")
     RunRaceV4()
-    local m = GetNearestEnemy(250)
-    if m then AttackTarget(m) FastAttack() end
-end, 0.2)
+end, 0.25)
 SpawnFlagLoop("AutoRainbowHaki", function()
     TalkNPC("Horned Man")
     CommF("HornedMan")
@@ -6045,15 +6338,46 @@ SpawnFlagLoop("AutoBuyBusoColor", function()
     pcall(function() FireComm("ColorsDealer", "2") end)
 end, 4)
 SpawnFlagLoop("InfSoru", function()
-    pcall(function() FireComm("Soru") end)
-end, 0.5)
+    pcall(function()
+        ZeroCooldown()
+        if Character then
+            Character:SetAttribute("SoruCooldown", 0)
+            for _, v in ipairs(Character:GetDescendants()) do
+                local n = v.Name:lower()
+                if n:find("soru") or n:find("dashcd") then
+                    if v:IsA("BoolValue") then v.Value = false
+                    elseif v:IsA("NumberValue") or v:IsA("IntValue") then v.Value = 0
+                    elseif v:IsA("StringValue") then
+                    else
+                        pcall(function() v:Destroy() end)
+                    end
+                end
+            end
+        end
+        local ac = vu132 and vu132.activeController
+        if ac then
+            ac.timeToNextAttack = 0
+            pcall(function() ac.timeToNextDash = 0 end)
+        end
+    end)
+end, 0.08)
 SpawnFlagLoop("InfObservation", function()
     pcall(function()
-        local d = LocalPlayer.Data and LocalPlayer.Data:FindFirstChild("Observation")
-        -- keep observation up via ken
-        FireComm("Ken")
+        if Character and not (Character:FindFirstChild("Ken") or Character:FindFirstChild("Observation")) then
+            CommF("Ken")
+        end
+        local ac = vu132 and vu132.activeController
+        if ac then ac.hitboxMagnitude = math.max(ac.hitboxMagnitude or 0, 120) end
+        if Character then
+            for _, v in ipairs(Character:GetDescendants()) do
+                if v.Name:lower():find("observation") or v.Name:lower():find("dodge") then
+                    if v:IsA("NumberValue") or v:IsA("IntValue") then v.Value = 0 end
+                    if v:IsA("BoolValue") then v.Value = false end
+                end
+            end
+        end
     end)
-end, 1)
+end, 0.2)
 
 -- ---- Fruits ----
 SpawnFlagLoop("AutoStoreFruitShop", function()
@@ -6315,10 +6639,13 @@ print("[BFHub] Combat 2026 ready — FastAttack + real CDK/Saber/Zou/Dough/Levia
 -------------------------------------------------
 -- MAIN TAB INFO
 -------------------------------------------------
+pcall(function()
 Tabs.Main:AddParagraph({
     Title = "BF Full Hub 2026",
-    Content = "2026 deep-fix: CommF_ returns result, Gladiator, Tiki/Submerged, FastAttack no-CD\nElite Progress / CakePrinceSpawner / RaidsNpc / Awakener / CDK DoneT1-3\nRF/SubmarineWorkerSpeak + RF/Craft + RF/Jobs + getInventory Godhuman"
+    Content = "2026 deep-fix: CommF_ returns result, Gladiator, Tiki/Submerged, FastAttack no-CD\nElite Progress / CakePrinceSpawner / RaidsNpc / Awakener / CDKQuest\nRF/SubmarineWorkerSpeak + RF/Craft + RF/Jobs + getInventory Godhuman"
 })
+end)
+
 
 Tabs.Main:AddButton({
     Title = "Redeem August 2026 Codes",
